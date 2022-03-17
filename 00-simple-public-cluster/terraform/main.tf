@@ -20,7 +20,8 @@ resource "aws_vpc" "vpc" {
   enable_dns_support   = true
 
   tags = {
-    Name = "${var.cluster_name}-vpc"
+    Name                               = "${var.cluster_name}-vpc"
+    "kubernetes.io/cluster/kubernetes" = "owned"
   }
 }
 
@@ -29,7 +30,8 @@ resource "aws_internet_gateway" "igw" {
   vpc_id = aws_vpc.vpc.id
 
   tags = {
-    Name = "${var.cluster_name}-igw"
+    Name                               = "${var.cluster_name}-igw"
+    "kubernetes.io/cluster/kubernetes" = "owned"
   }
 }
 
@@ -43,16 +45,8 @@ resource "aws_route_table" "public_rt" {
   }
 
   tags = {
-    Name = "${var.cluster_name}-public-rt"
-  }
-}
-
-# Create a Private RT
-resource "aws_route_table" "private_rt" {
-  vpc_id = aws_vpc.vpc.id
-
-  tags = {
-    Name = "${var.cluster_name}-private-rt"
+    Name                               = "${var.cluster_name}-public-rt"
+    "kubernetes.io/cluster/kubernetes" = "owned"
   }
 }
 
@@ -63,91 +57,30 @@ data "aws_availability_zones" "available" {
 
 # Create Public Subnets
 resource "aws_subnet" "public_subnet" {
+  count                   = 2
   vpc_id                  = aws_vpc.vpc.id
-  cidr_block              = var.public_subnet_cidr
+  cidr_block              = var.public_subnet_cidr[(count.index + 1) % 2]
   map_public_ip_on_launch = true
   availability_zone       = data.aws_availability_zones.available.names[0]
+  # availability_zone       = data.aws_availability_zones.available.names[(count.index + 1) % 2] az 에서 특정 ami가 동작하지 않음
 
   tags = {
-    Name = "${var.cluster_name}-public-${data.aws_availability_zones.available.zone_ids[0]}-1"
-  }
-}
-
-# Create Private Subnets
-resource "aws_subnet" "private_subnet" {
-  vpc_id            = aws_vpc.vpc.id
-  cidr_block        = var.private_subnet_cidr
-  availability_zone = data.aws_availability_zones.available.names[0]
-
-  tags = {
-    Name = "${var.cluster_name}-private-${data.aws_availability_zones.available.zone_ids[0]}-1"
+    Name                               = "${var.cluster_name}-public-${data.aws_availability_zones.available.zone_ids[0]}"
+    "kubernetes.io/cluster/kubernetes" = "owned"
   }
 }
 
 # Associate Public Subnets and Routing Table
 resource "aws_route_table_association" "public_subnet_association" {
-  subnet_id      = aws_subnet.public_subnet.id
+  count          = 2
+  subnet_id      = aws_subnet.public_subnet[(count.index % 2)].id
   route_table_id = aws_route_table.public_rt.id
-}
-
-# Associate Private Subnets and Routing Table
-resource "aws_route_table_association" "private_subnet_association" {
-  subnet_id      = aws_subnet.private_subnet.id
-  route_table_id = aws_route_table.private_rt.id
 }
 
 # Create a Key Pair
 resource "aws_key_pair" "aws_key" {
-  key_name   = var.ssh_key_name
-  public_key = file(format("%s/%s.pub", var.ssh_key_path, var.ssh_key_name))
-}
-
-# Create a Bastion Host Security Group
-resource "aws_security_group" "bastion_security_group" {
-  name        = "${var.cluster_name}-bastion-sg"
-  description = "Security Group for ${var.cluster_name} Bastion Host"
-  vpc_id      = aws_vpc.vpc.id
-
-  # --- SSH ---
-  ingress {
-    from_port   = 22
-    to_port     = 22
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = -1
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  tags = {
-    Name = "${var.cluster_name}-bastion-sg"
-  }
-}
-
-# Create Bastion Host Instance
-resource "aws_instance" "bastion" {
-  ami           = var.instance_ami
-  instance_type = var.instance_type
-  key_name      = var.ssh_key_name
-
-  associate_public_ip_address = true
-
-  vpc_security_group_ids = ["${aws_security_group.bastion_security_group.id}"]
-  subnet_id              = aws_subnet.public_subnet.id
-
-  root_block_device {
-    volume_type           = "gp2"
-    volume_size           = "10"
-    delete_on_termination = true
-  }
-
-  tags = {
-    Name = "${var.cluster_name}-bastion"
-  }
+  key_name   = element(split("/", var.ssh_key), length(split("/", var.ssh_key))) # split ssh key and get last element
+  public_key = file(format("%s.pub", var.ssh_key))
 }
 
 # Create a Cluster Security Group
@@ -161,7 +94,7 @@ resource "aws_security_group" "cluster_security_group" {
     from_port   = 22
     to_port     = 22
     protocol    = "tcp"
-    cidr_blocks = ["${aws_instance.bastion.private_ip}/32"]
+    cidr_blocks = ["0.0.0.0/0"]
   }
 
   # --- Kubelet API ---
@@ -196,18 +129,22 @@ resource "aws_security_group" "cluster_security_group" {
   }
 
   tags = {
-    Name = "${var.cluster_name}-cluster-sg"
+    Name                               = "${var.cluster_name}-cluster-sg"
+    "kubernetes.io/cluster/kubernetes" = "owned"
   }
 }
 
-# Create Master Node Instance
+# Create Master Node Instances
 resource "aws_instance" "master" {
+  count         = var.master_count
   ami           = var.instance_ami
   instance_type = var.instance_type
-  key_name      = var.ssh_key_name
+  key_name      = element(split("/", var.ssh_key), length(split("/", var.ssh_key))) # split ssh key and get last element
+
+  associate_public_ip_address = true
 
   vpc_security_group_ids = ["${aws_security_group.cluster_security_group.id}"]
-  subnet_id              = aws_subnet.private_subnet.id
+  subnet_id              = aws_subnet.public_subnet[(count.index % 2)].id
 
   root_block_device {
     volume_type           = "gp2"
@@ -216,18 +153,22 @@ resource "aws_instance" "master" {
   }
 
   tags = {
-    Name = "${var.cluster_name}-master"
+    Name                               = "${var.cluster_name}-master-${count.index + 1}"
+    "kubernetes.io/cluster/kubernetes" = "owned"
   }
 }
 
-# Create Worker Node Instance
+# Create Worker Node Instances
 resource "aws_instance" "worker" {
+  count         = var.worker_count
   ami           = var.instance_ami
   instance_type = var.instance_type
-  key_name      = var.ssh_key_name
+  key_name      = element(split("/", var.ssh_key), length(split("/", var.ssh_key))) # split ssh key and get last element
+
+  associate_public_ip_address = true
 
   vpc_security_group_ids = ["${aws_security_group.cluster_security_group.id}"]
-  subnet_id              = aws_subnet.private_subnet.id
+  subnet_id              = aws_subnet.public_subnet[(count.index % 2)].id
 
   root_block_device {
     volume_type           = "gp2"
@@ -236,6 +177,34 @@ resource "aws_instance" "worker" {
   }
 
   tags = {
-    Name = "${var.cluster_name}-worker"
+    Name                               = "${var.cluster_name}-worker-${count.index + 1}"
+    "kubernetes.io/cluster/kubernetes" = "owned"
+  }
+}
+
+# Outputs
+output "kubernetes_master_public_ip" {
+  value = format("Master Nodes : %s", join(",", aws_instance.master.*.public_ip))
+}
+output "kubernetes_workers_public_ip" {
+  value = format("Worker Nodes : %s", join(",", aws_instance.worker.*.public_ip))
+}
+output "master_ssh_command" {
+  value = format("ssh -i %s ubuntu@%s", var.ssh_key, aws_instance.master.0.public_ip)
+}
+
+# Provision Ansible Inventory
+resource "null_resource" "tc_instances" {
+  provisioner "local-exec" {
+    command = <<EOD
+    echo "[kube_masters]" >> kube_hosts
+    %{for index, ip in aws_instance.master.*.public_ip~}
+    echo "master-${index} ansible_host="${ip}" ansible_user=ubuntu ansible_ssh_private_key_file=${var.ssh_key}" >> kube_hosts
+    %{endfor~}
+    echo "[kube_workers]" >> kube_hosts
+    %{for index, ip in aws_instance.worker.*.public_ip~}
+    echo "worker-${index} ansible_host="${ip}" ansible_user=ubuntu ansible_ssh_private_key_file=${var.ssh_key}" >> kube_hosts
+    %{endfor~}
+EOD
   }
 }

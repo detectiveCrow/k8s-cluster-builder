@@ -1,20 +1,17 @@
-# 01_single_public_private_cluster_with_bastion
+# 00-simple-public-cluster
 
 ## 구성
 - vpc
-    - private subnet 1
-        - master node (ec2)
-        - worker node 1 (ec2)
-        - worker node 2 (ec2)
-    - public subnet 1
-        - bastion (ec2)
-        - nat gateway
+    - public subnet 1, 2
+        - master node n (ec2)
+        - worker node n (ec2)
 
-## 테라폼 실행
+## 실행 전 기본 설정
 
 1. 실행 필요요소 설치
-    - terraform
-
+    ```
+    sh install.sh
+    ```
 
 2. aws.credentails 생성
 
@@ -39,25 +36,20 @@
     ssh-keygen -t rsa -b 4096 -N '' -f ~/.ssh/cluster-builder-key
     ```
 
-## 접속
+### 클러스터 생성 및 삭제
 
-### 접속 방법
-- Bastion Host 에 접속
+- 클러스터 생성
+
     ```
-    ssh ubuntu@[bastion ip] -i [ssh_key_path]/[ssh_key_name]
-    ```
-- Bastion Host에 key 파일 복사
-- Node에 접속
-    ```
-    ssh ubuntu@[node ip] -i [ssh_key_path]/[ssh_key_name]
+    sh create.sh
     ```
 
-### 에러 대응
-- WARNING: UNPROTECTED PRIVATE KEY FILE!
-    ```
-    # 다음과 같이 group 과 other 의 모든 권한을 막아주면 됨.
+    해당 커맨드에서 인스턴스 생성중에 앤서블 커맨드가 실행되면 에러가 발생함, 이럴 시에는 다시 위의 커맨드를 실행하면 문제없이 생성됨 
 
-    chmod 0400 [ssh_key_path]/[ssh_key_name]
+- 클러스터 삭제
+
+    ```
+    sh destroy.sh
     ```
 
 ## 참고
