@@ -198,7 +198,7 @@ resource "aws_spot_instance_request" "master" {
 
 # ----- Kube Workers -----
 resource "aws_spot_instance_request" "worker" {
-  count         = 1
+  count         = 2
   ami           = var.instance_ami
   instance_type = var.instance_type
   key_name      = var.ssh_key_name
